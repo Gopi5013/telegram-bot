@@ -8,6 +8,7 @@ from typing import Optional
 
 from flask import Flask, jsonify, request
 from telegram import Update
+from telegram.ext import Application as PTBApplication
 
 from taxi_bot.bot import build_application
 from taxi_bot.config import get_settings
@@ -20,7 +21,7 @@ app = Flask(__name__)
 # We run python-telegram-bot's async Application in a background event loop thread.
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _loop_thread: Optional[threading.Thread] = None
-_ptb_app = build_application()
+_ptb_app: Optional[PTBApplication] = None
 _started = False
 _start_lock = threading.Lock()
 _ready_event = threading.Event()
@@ -46,13 +47,21 @@ async def _ptb_initialize_only() -> None:
     # In a WSGI + threads setup (gunicorn), calling Application.start() can be
     # problematic depending on event-loop/signal handling. For basic webhook
     # bots, initialize() is sufficient for process_update().
+    global _ptb_app
     log.info("Initializing python-telegram-bot application...")
+    if _ptb_app is None:
+        # Build lazily so the WSGI server can bind its port even if BOT_TOKEN
+        # or other env vars are misconfigured (that would otherwise crash on import).
+        _ptb_app = build_application()
     await _ptb_app.initialize()
     log.info("python-telegram-bot application initialized.")
 
 
 async def _ptb_set_webhook_only() -> None:
     settings = get_settings()
+    if _ptb_app is None:
+        log.warning("PTB app not initialized yet; skipping automatic setWebhook.")
+        return
     if not settings.webhook_url:
         log.warning("WEBHOOK_URL is not set; skipping automatic setWebhook.")
         return
@@ -125,6 +134,8 @@ def telegram_webhook() -> tuple[object, int]:
         # Avoid hanging requests (Telegram will retry).
         return jsonify({"ok": False, "error": "bot not ready"}), 503
     assert _loop is not None
+    if _ptb_app is None:
+        return jsonify({"ok": False, "error": "bot not initialized"}), 503
 
     data = request.get_json(force=True, silent=False)
     if not isinstance(data, dict):
