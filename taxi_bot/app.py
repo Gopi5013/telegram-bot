@@ -46,8 +46,11 @@ async def _ptb_initialize_and_set_webhook() -> None:
     await _ptb_app.initialize()
     await _ptb_app.start()
 
+    # Webhook is optional at runtime: on PaaS you usually set it, but you can
+    # also set it manually via Telegram API. Don't fail the whole app if missing.
     if not settings.webhook_url:
-        raise RuntimeError("WEBHOOK_URL is missing in taxi_bot/.env")
+        log.warning("WEBHOOK_URL is not set; skipping automatic setWebhook.")
+        return
 
     # Telegram will POST updates to: {WEBHOOK_URL}/telegram
     webhook_full = settings.webhook_url.rstrip("/") + "/telegram"
@@ -89,6 +92,7 @@ def telegram_webhook() -> tuple[object, int]:
     if not isinstance(data, dict):
         return jsonify({"ok": False, "error": "invalid json"}), 400
 
+    log.debug("Incoming update_id=%s", data.get("update_id"))
     update = Update.de_json(data, _ptb_app.bot)
     asyncio.run_coroutine_threadsafe(_ptb_app.process_update(update), _loop)
     return jsonify({"ok": True}), 200

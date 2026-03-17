@@ -65,8 +65,8 @@ async def _help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(
             "Use the menu to book a taxi or view bookings.\n"
             "Commands:\n"
-            "• /start - show menu\n"
-            "• /cancel - cancel booking flow\n",
+            "- /start - show menu\n"
+            "- /cancel - cancel booking flow\n",
             reply_markup=main_menu_keyboard(),
         )
 
