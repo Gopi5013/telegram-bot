@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local venv
+.venv/
+venv/
+
+# SQLite db
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets (keep .env local)
+.env
+
