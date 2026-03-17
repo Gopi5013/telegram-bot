@@ -22,6 +22,7 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 _loop_thread: Optional[threading.Thread] = None
 _ptb_app = build_application()
 _started = False
+_start_lock = threading.Lock()
 
 
 def _start_background_loop() -> asyncio.AbstractEventLoop:
@@ -59,23 +60,21 @@ def _ensure_started() -> None:
     if _started:
         return
 
-    if _loop is None:
-        _loop = _start_background_loop()
-        fut = asyncio.run_coroutine_threadsafe(_ptb_initialize_and_set_webhook(), _loop)
-        fut.result(timeout=30)
-    _started = True
+    with _start_lock:
+        if _started:
+            return
+        if _loop is None:
+            _loop = _start_background_loop()
+            fut = asyncio.run_coroutine_threadsafe(_ptb_initialize_and_set_webhook(), _loop)
+            fut.result(timeout=30)
+        _started = True
 
 
 @app.get("/health")
 def health() -> tuple[str, int]:
-    return "ok", 200
-
-
-@app.before_serving
-def _startup() -> None:
-    # For production servers (e.g., gunicorn on Render), ensure webhook is set on startup
-    # rather than waiting for the first request.
+    # Also triggers startup so you can verify webhook setup via /health.
     _ensure_started()
+    return "ok", 200
 
 
 @app.post("/telegram")
@@ -97,6 +96,21 @@ def run_flask() -> None:
     # Flask dev server (good enough for local + ngrok testing).
     port = int(os.getenv("PORT", "8000"))
     app.run(host="0.0.0.0", port=port, debug=False)
+
+
+def _start_in_background() -> None:
+    # Best-effort startup for WSGI servers (gunicorn). We can't rely on Flask lifecycle
+    # hooks across versions, so we kick off initialization in a daemon thread.
+    def runner() -> None:
+        try:
+            _ensure_started()
+        except Exception:
+            log.exception("Startup failed (webhook not set yet). Will retry on next request.")
+
+    threading.Thread(target=runner, name="startup", daemon=True).start()
+
+
+_start_in_background()
 
 
 if __name__ == "__main__":

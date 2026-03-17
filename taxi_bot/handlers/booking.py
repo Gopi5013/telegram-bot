@@ -46,6 +46,7 @@ def booking_conversation_handler() -> ConversationHandler:
         name="booking_conversation",
         persistent=False,
         allow_reentry=True,
+        per_message=True,
     )
 
 
