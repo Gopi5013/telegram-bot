@@ -23,6 +23,7 @@ _loop_thread: Optional[threading.Thread] = None
 _ptb_app = build_application()
 _started = False
 _start_lock = threading.Lock()
+_ready_event = threading.Event()
 
 
 def _start_background_loop() -> asyncio.AbstractEventLoop:
@@ -58,19 +59,32 @@ async def _ptb_initialize_and_set_webhook() -> None:
     log.info("Webhook set to %s", webhook_full)
 
 
-def _ensure_started() -> None:
+def _ensure_started(wait: bool = True, timeout_s: float = 5.0) -> bool:
     global _loop, _started
     if _started:
-        return
+        return _ready_event.is_set()
 
     with _start_lock:
         if _started:
-            return
+            return _ready_event.is_set()
         if _loop is None:
             _loop = _start_background_loop()
             fut = asyncio.run_coroutine_threadsafe(_ptb_initialize_and_set_webhook(), _loop)
-            fut.result(timeout=30)
+
+            def _mark_ready(f) -> None:  # type: ignore[no-untyped-def]
+                try:
+                    f.result()
+                    _ready_event.set()
+                except Exception:
+                    log.exception("PTB initialize/start failed; webhook handling will retry.")
+
+            fut.add_done_callback(_mark_ready)
         _started = True
+
+    if not wait:
+        return _ready_event.is_set()
+
+    return _ready_event.wait(timeout=timeout_s)
 
 
 @app.get("/health")
@@ -83,9 +97,18 @@ def index() -> tuple[str, int]:
     return "Taxi bot is running. Use /health or Telegram webhook at /telegram.", 200
 
 
+@app.get("/telegram")
+def telegram_webhook_get() -> tuple[object, int]:
+    # Browsers send GET; Telegram sends POST. This endpoint is not meant to be opened in a browser.
+    return jsonify({"ok": True, "message": "Webhook endpoint. Telegram will POST updates here."}), 200
+
+
 @app.post("/telegram")
 def telegram_webhook() -> tuple[object, int]:
-    _ensure_started()
+    ready = _ensure_started(wait=True, timeout_s=2.0)
+    if not ready:
+        # Avoid hanging requests (Telegram will retry).
+        return jsonify({"ok": False, "error": "bot not ready"}), 503
     assert _loop is not None
 
     data = request.get_json(force=True, silent=False)
@@ -99,7 +122,7 @@ def telegram_webhook() -> tuple[object, int]:
 
 
 def run_flask() -> None:
-    _ensure_started()
+    _ensure_started(wait=False)
     # Flask dev server (good enough for local + ngrok testing).
     port = int(os.getenv("PORT", "8000"))
     app.run(host="0.0.0.0", port=port, debug=False)
@@ -113,7 +136,7 @@ def _start_in_background() -> None:
         # will still come up and can be validated via /health. Webhook setup can
         # be retried by redeploying, hitting /telegram, or setting it manually.
         try:
-            _ensure_started()
+            _ensure_started(wait=True, timeout_s=30.0)
         except Exception:
             log.exception("Startup failed (webhook not set yet). Will retry on next /telegram request.")
 
