@@ -43,8 +43,12 @@ def _start_background_loop() -> asyncio.AbstractEventLoop:
 
 
 async def _ptb_initialize_only() -> None:
+    # In a WSGI + threads setup (gunicorn), calling Application.start() can be
+    # problematic depending on event-loop/signal handling. For basic webhook
+    # bots, initialize() is sufficient for process_update().
+    log.info("Initializing python-telegram-bot application...")
     await _ptb_app.initialize()
-    await _ptb_app.start()
+    log.info("python-telegram-bot application initialized.")
 
 
 async def _ptb_set_webhook_only() -> None:
@@ -116,7 +120,7 @@ def telegram_webhook_get() -> tuple[object, int]:
 def telegram_webhook() -> tuple[object, int]:
     # Telegram expects a quick response; wait a bit for startup, then return 503
     # so Telegram can retry if we're still warming up.
-    ready = _ensure_started(wait=True, timeout_s=10.0)
+    ready = _ensure_started(wait=True, timeout_s=20.0)
     if not ready:
         # Avoid hanging requests (Telegram will retry).
         return jsonify({"ok": False, "error": "bot not ready"}), 503
