@@ -72,9 +72,12 @@ def _ensure_started() -> None:
 
 @app.get("/health")
 def health() -> tuple[str, int]:
-    # Also triggers startup so you can verify webhook setup via /health.
-    _ensure_started()
     return "ok", 200
+
+
+@app.get("/")
+def index() -> tuple[str, int]:
+    return "Taxi bot is running. Use /health or Telegram webhook at /telegram.", 200
 
 
 @app.post("/telegram")
@@ -102,10 +105,13 @@ def _start_in_background() -> None:
     # Best-effort startup for WSGI servers (gunicorn). We can't rely on Flask lifecycle
     # hooks across versions, so we kick off initialization in a daemon thread.
     def runner() -> None:
+        # Don't block the web server startup. If Telegram/API calls fail, the app
+        # will still come up and can be validated via /health. Webhook setup can
+        # be retried by redeploying, hitting /telegram, or setting it manually.
         try:
             _ensure_started()
         except Exception:
-            log.exception("Startup failed (webhook not set yet). Will retry on next request.")
+            log.exception("Startup failed (webhook not set yet). Will retry on next /telegram request.")
 
     threading.Thread(target=runner, name="startup", daemon=True).start()
 
