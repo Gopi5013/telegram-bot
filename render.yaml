@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: taxi-booking-telegram-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m gunicorn -w 1 --threads 8 -b 0.0.0.0:$PORT taxi_bot.app:app
+    healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_URL
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SQLITE_PATH
+        value: taxi_bot.db

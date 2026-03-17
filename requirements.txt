@@ -1,0 +1,4 @@
+# Render (and many PaaS) default to installing from a repo-root requirements.txt.
+# This includes the actual app requirements kept under taxi_bot/.
+-r taxi_bot/requirements.txt
+
