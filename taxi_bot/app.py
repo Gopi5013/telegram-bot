@@ -42,18 +42,17 @@ def _start_background_loop() -> asyncio.AbstractEventLoop:
     return loop
 
 
-async def _ptb_initialize_and_set_webhook() -> None:
-    settings = get_settings()
+async def _ptb_initialize_only() -> None:
     await _ptb_app.initialize()
     await _ptb_app.start()
 
-    # Webhook is optional at runtime: on PaaS you usually set it, but you can
-    # also set it manually via Telegram API. Don't fail the whole app if missing.
+
+async def _ptb_set_webhook_only() -> None:
+    settings = get_settings()
     if not settings.webhook_url:
         log.warning("WEBHOOK_URL is not set; skipping automatic setWebhook.")
         return
 
-    # Telegram will POST updates to: {WEBHOOK_URL}/telegram
     webhook_full = settings.webhook_url.rstrip("/") + "/telegram"
     await _ptb_app.bot.set_webhook(url=webhook_full)
     log.info("Webhook set to %s", webhook_full)
@@ -69,7 +68,7 @@ def _ensure_started(wait: bool = True, timeout_s: float = 5.0) -> bool:
             return _ready_event.is_set()
         if _loop is None:
             _loop = _start_background_loop()
-            fut = asyncio.run_coroutine_threadsafe(_ptb_initialize_and_set_webhook(), _loop)
+            fut = asyncio.run_coroutine_threadsafe(_ptb_initialize_only(), _loop)
 
             def _mark_ready(f) -> None:  # type: ignore[no-untyped-def]
                 try:
@@ -79,6 +78,16 @@ def _ensure_started(wait: bool = True, timeout_s: float = 5.0) -> bool:
                     log.exception("PTB initialize/start failed; webhook handling will retry.")
 
             fut.add_done_callback(_mark_ready)
+
+            # Set webhook separately so a slow/failed Telegram API call doesn't
+            # block the bot from becoming ready to process updates.
+            def _set_webhook_later() -> None:
+                try:
+                    asyncio.run_coroutine_threadsafe(_ptb_set_webhook_only(), _loop).result(timeout=20)
+                except Exception:
+                    log.exception("setWebhook failed (you can set it manually).")
+
+            threading.Thread(target=_set_webhook_later, name="set-webhook", daemon=True).start()
         _started = True
 
     if not wait:
@@ -105,7 +114,9 @@ def telegram_webhook_get() -> tuple[object, int]:
 
 @app.post("/telegram")
 def telegram_webhook() -> tuple[object, int]:
-    ready = _ensure_started(wait=True, timeout_s=2.0)
+    # Telegram expects a quick response; wait a bit for startup, then return 503
+    # so Telegram can retry if we're still warming up.
+    ready = _ensure_started(wait=True, timeout_s=10.0)
     if not ready:
         # Avoid hanging requests (Telegram will retry).
         return jsonify({"ok": False, "error": "bot not ready"}), 503
